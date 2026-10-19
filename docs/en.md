@@ -1,61 +1,117 @@
-# Demo Devices Template
+# KEBA KeContact for Gladys
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Follow your **KEBA KeContact P20 or P30** charging station (or a BMW wallbox
+built on it) in Gladys, through its **local UDP interface** (port 7090),
+without any cloud.
+
+> Unofficial integration, **never tested with a real station**: it follows the
+> keba-kecontact library (the one of Home Assistant) and KEBA's UDP guide.
+> Feedback is welcome. Not affiliated with KEBA.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per station (identified by its serial number), with:
 
-## Configuration
+- the **state** of the station (starting, not ready, ready, charging, error,
+  authorization rejected), the **connector** and the **charging state**;
+- **plug and cable**: vehicle plugged in, cable plugged at the station, cable
+  locked;
+- **power** (W), **current** (A) and **voltage** (V) of each phase;
+- **energy of the session** and **total energy** (kWh): plain sensors, never
+  an index of the energy tab (the station is already behind your meter, it
+  would be counted twice);
+- **maximum current allowed** (A), **charging enabled** by the station and
+  **charging allowed** ("ena"), **failsafe mode** on or off,
+  **authorization required** (RFID);
+- optionally, three commands (see below).
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+A station without a built-in meter (P20 e-series, P30 "Deutschland Edition")
+gives no power, current, voltage nor energy: these features stay empty.
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+## 1. Turn the UDP interface on in the station
 
-## Actions
+The UDP interface ("smart home interface") is **off from the factory**. On a
+P20 or a P30 c-series, it is turned on with a **DIP switch** inside the
+station: according to KEBA's documentation, switch **DSW1.3** set to **ON**
+(check the installation manual of your model). On a P30 x-series it is set in
+its web interface (the "UDP" / "Smart Home interface" setting).
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+**Have an electrician do it**: the station must be opened, powered off. Do
+not touch the other switches (maximum current, etc.).
 
-## Scenes
+The station must be on your network (Ethernet cable) with a **fixed IP
+address** (DHCP reservation in your router).
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+## 2. Configure the integration
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+1. In Gladys, install the **KEBA KeContact** integration from the store.
+2. Enter the **IP address** of the station (an IPv4 address; several
+   stations: separate them with commas, eight at most), then save.
+3. Open the **Discovery** tab and add the station.
 
-## Dashboard
+The **Test the connection** button reads every station once.
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+## Security: no authentication
 
-## Troubleshooting
+KEBA's UDP interface **has no authentication**: any device on your local
+network can read the station and send it commands, even without Gladys. Keep
+the station on a **trusted local network** (never exposed to the Internet,
+ideally on a network apart from guests and untrusted devices). Allowing the
+commands in Gladys opens nothing more on the station, but lets Gladys (scenes,
+AI chat through MCP, Gladys accounts) send them.
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+## Commands (off by default)
+
+With the **Allow the commands** option:
+
+- **Allow charging** and **Forbid charging**: two buttons that send `ena 1`
+  and `ena 0`;
+- **Set the charging current**: a list from 6 A to the hardware limit of the
+  station (`curr`).
+
+Never a switch: a "turn everything off" of a voice assistant or a scene cannot
+cut the charge. Before each command the station is read again (report 2) and
+the command decided on that read; the current is refused above the hardware
+limit read then (`Curr HW`). A command without an answer is reported "sent,
+without confirmation"; a refusal of the station (`TCH-ERR`) is shown as such:
+according to KEBA, some models or settings (DIP switches, load management of a
+group of stations) refuse these commands. A product the integration does not
+recognize (neither KEBA P20/P30 nor BMW) refuses the commands.
+
+The **failsafe mode** is only read: the integration never changes it.
+Starting or stopping a session with an RFID tag is not offered.
+
+With the commands allowed, the AI chat of Gladys (MCP) can create and run a
+scene that allows or forbids charging.
+
+## Network and Docker
+
+The station answers to **UDP port 7090 of the sender**. The integration opens
+this port in its container; the answers come back through the Docker network
+of Gladys (NAT) without any setting. If another program on the same machine
+already talks to the station from port 7090 (Home Assistant on the host
+network, for instance), answers may get lost: use only one of them. This was
+not checked on a real setup.
+
+## Pace
+
+Each station is read every 30 s by default (10 s to 10 min): report 2 (state),
+report 3 (meter), and report 1 (identity) once an hour. One request at a time,
+at least 100 ms between two messages (2 s after `ena 0`), as keba-kecontact.
+A station that stops answering is read again after 30 s, 1, 2 then 5 min; it
+shows "Station unreachable".
+
+## Limits
+
+- Never tested with a real station.
+- IPv4 addresses only (an answer is attributed to its request by its source
+  address).
+- No automatic discovery (a broadcast does not cross the Docker network).
+- No RFID start, no failsafe setting, no phase switching, no session history
+  (reports 1xx).
+
+## Credits
+
+The protocol is ported from **keba-kecontact** (MIT, Philipp Danner), the
+library of Home Assistant's KEBA integration. See `THIRD_PARTY_NOTICES.md`.
+KEBA and KeContact are trademarks of KEBA AG.

@@ -6,6 +6,9 @@
 #   - a single writable volume: /data
 #   - runs as a non-root user
 #   - multi-arch image (linux/amd64 + linux/arm64), see the CI workflow
+#
+# The integration binds UDP port 7090 inside the container (above 1024: no
+# privilege needed); the stations answer to port 7090 of the sender.
 # -----------------------------------------------------------------------------
 
 FROM node:24-alpine
@@ -15,19 +18,20 @@ RUN apk add --no-cache dumb-init
 
 WORKDIR /app
 
-# Install the PROD dependencies first (better build cache).
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm install --omit=dev
+# Install the PROD dependencies first (better build cache). The lockfile is
+# committed: strict `npm ci`, and no install script runs.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 
-# Then the integration code.
+# Then the integration code, its license and the third-party notices.
 COPY index.js ./
 COPY src ./src
-COPY gladys-assistant-integration.json ./
+COPY gladys-assistant-integration.json LICENSE THIRD_PARTY_NOTICES.md ./
 
-# The only writable location allowed at runtime. Docker creates a new volume
+# The only writable location allowed at runtime (unused by this integration,
+# kept owned by `node` as the sandbox expects). Docker creates a new volume
 # with the owner of the image's /data, so it must belong to `node`, and before
-# VOLUME: changes made to /data after it are discarded. Without this, /data is
-# root-owned and the integration cannot write to it.
+# VOLUME: changes made to /data after it are discarded.
 ENV NODE_ENV=production
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]

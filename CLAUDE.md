@@ -32,12 +32,15 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+src/handlers.js                   SDK handlers -> KebaApp (shared with the tests)
+src/app.js                        stations, polling, devices, states, status, commands
+src/devices.js                    device and states of a station (pure); feature roles are frozen
+src/keba/protocol.js              KEBA answers, products, reports, command texts (pure)
+src/keba/channel.js               UDP socket on 7090: one request at a time, pauses, attribution
+src/publisher.js                  states to Gladys within 300 per minute
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/i18n.js                       English and French runtime texts
+scripts/cover.mjs                 cover.png generator (plain Node, no dependency)
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
 test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
@@ -74,3 +77,9 @@ test/                             node --test, against the SDK's fake Gladys (in
   manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.
+- **KEBA UDP.** One request at a time on the channel, never less than 100 ms
+  between two messages (2 s after `ena 0`); an answer counts only from the IP
+  it was sent to and of the kind expected. Commands stay behind
+  `allow_commands` (off by default), are decided on a fresh report 2, never
+  use a switch, never send `curr 0`, never touch the failsafe mode. The
+  energies stay plain sensors, never an `index`/`energy` feature.
