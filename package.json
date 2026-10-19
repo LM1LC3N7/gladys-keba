@@ -1,6 +1,6 @@
 {
   "name": "gladys-keba",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for KEBA KeContact P20 / P30 charging stations (state, plug and cable, power, current and voltage per phase, energy, current limit; optional allow/forbid charging and charging current), over their local UDP interface. Unofficial, not affiliated with KEBA.",
   "type": "module",

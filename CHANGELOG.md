@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-19
+
 ### Added
 
 - KEBA KeContact P20 / P30 (and BMW wallbox) charging stations over their
@@ -30,4 +32,5 @@ the notes of the version's GitHub Release.
 - "Test the connection" button; English and French guides (UDP interface,
   DIP switch, no authentication on the station).
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-keba/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-keba/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-keba/releases/tag/v0.1.1
