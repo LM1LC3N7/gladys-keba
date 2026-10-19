@@ -67,16 +67,40 @@ With the **Allow the commands** option:
 - **Allow charging** and **Forbid charging**: two buttons that send `ena 1`
   and `ena 0`;
 - **Set the charging current**: a list from 6 A to the hardware limit of the
-  station (`curr`).
+  station (`curr`), **at most once a minute per station**. This is no fine
+  regulation (following solar production second by second): the station may
+  keep the value in permanent memory, still to check. A change sooner is
+  refused unsent; "Forbid charging" stays always available.
 
 Never a switch: a "turn everything off" of a voice assistant or a scene cannot
 cut the charge. Before each command the station is read again (report 2) and
 the command decided on that read; the current is refused above the hardware
-limit read then (`Curr HW`). A command without an answer is reported "sent,
-without confirmation"; a refusal of the station (`TCH-ERR`) is shown as such:
-according to KEBA, some models or settings (DIP switches, load management of a
-group of stations) refuse these commands. A product the integration does not
-recognize (neither KEBA P20/P30 nor BMW) refuses the commands.
+limit read then (`Curr HW`, rounded down to the ampere). The option is checked
+again right before the command leaves.
+
+What the answers mean:
+
+- **TCH-OK** means the station **accepted** the command, not that it
+  **applied** it. The integration reads the station afterwards; if the value
+  never moved, it says so once in the log and in the status ("accepted …
+  without applying it"): a model that cannot be driven (c-series?) or a
+  setting (DSW1.3, load management of a group of stations).
+- **TCH-ERR**: the station refused (model or configuration).
+- No answer: "sent, without confirmation"; check the state a few seconds later.
+- A product the integration does not recognize (neither KEBA P20/P30 nor
+  BMW), or a station that gives no serial number in report 2, refuses the
+  commands (read only).
+
+**Forbid charging** always goes first: it does not wait for the answer of
+another command in progress (that one becomes "sent, without confirmation"),
+and an older "allow" or current never leaves after it. **Forbid stays in
+place** until an "Allow charging" (to check: maybe also until the station
+restarts): a scene that forbids charging must allow it again too.
+
+"Charging allowed (ena)" shows the state of these two buttons. "Charging
+enabled (station)" (`Enable sys`) shows whether the station allows charging
+overall: it may stay at 0 with "ena" at 1 for another reason (X1 input, RFID
+tag, load management, DIP switches).
 
 The **failsafe mode** is only read: the integration never changes it.
 Starting or stopping a session with an RFID tag is not offered.
@@ -86,19 +110,30 @@ scene that allows or forbids charging.
 
 ## Network and Docker
 
-The station answers to **UDP port 7090 of the sender**. The integration opens
-this port in its container; the answers come back through the Docker network
-of Gladys (NAT) without any setting. If another program on the same machine
-already talks to the station from port 7090 (Home Assistant on the host
-network, for instance), answers may get lost: use only one of them. This was
-not checked on a real setup.
+The station answers to **UDP port 7090 of the sender**, whatever port the
+question left from. The integration opens port 7090 in its container, on the
+Docker network of Gladys (a bridge with NAT). This only works if Docker keeps
+source port 7090 on the way out:
+
+- on Linux with "classic" Docker, the translation (MASQUERADE) usually keeps
+  the source port when it is free on the host: the expected case;
+- with Docker Desktop (Windows, macOS) or rootless Docker, traffic goes
+  through a network layer that may change the source port: the answers are
+  then lost and the station looks unreachable;
+- if another program on the same machine already talks to the station from
+  port 7090 (Home Assistant or evcc on the host network, for instance), Docker
+  must change the source port and the answers are lost: keep only one.
+
+None of this was checked on a real setup.
 
 ## Pace
 
 Each station is read every 30 s by default (10 s to 10 min): report 2 (state),
-report 3 (meter), and report 1 (identity) once an hour. One request at a time,
-at least 100 ms between two messages (2 s after `ena 0`), as keba-kecontact.
-A station that stops answering is read again after 30 s, 1, 2 then 5 min; it
+report 3 (meter), and report 1 (identity) once an hour. One request at a time
+for all the stations, at least 100 ms between two messages, and a 2 s pause
+for the station that just got `ena 0` (the others go on), as keba-kecontact.
+An answer arriving late is never taken for the one of a later request. A
+station that stops answering is read again after 30 s, 1, 2 then 5 min; it
 shows "Station unreachable".
 
 ## Limits

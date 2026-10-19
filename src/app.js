@@ -9,20 +9,24 @@
 // Commands follow the rules learnt on the previous modules:
 //   - decided on a fresh "report 2" of the station only, never on the state
 //     kept in memory, and refused when a value they need is missing;
-//   - the "Allow the commands" option is checked on arrival and again right
-//     before sending;
+//   - the "Allow the commands" option is checked on arrival and again by the
+//     channel right before each datagram leaves (beforeSend);
 //   - sent within 3.5 s of the click or refused unsent; answered by 4.3 s;
 //   - a command without an answer (it may have reached the station) is never
 //     answered "not sent": "sent, without confirmation", then spaced reads;
+//     TCH-OK means "accepted": a value that never moves is reported;
 //   - the ack never waits for a publication to Gladys;
 //   - one command at a time per station, except "forbid charging", which is
-//     never refused for a command in flight; never retried.
+//     never held back by the channel: it goes first, releases the wait of
+//     another command, and an older "allow" or current never leaves after
+//     it; never retried;
+//   - a "curr" at most once a minute per station.
 // The failsafe mode is read only: no command ever changes it.
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { normalizeConfig } from './config.js';
-import { CURRENT, FEATURES, PRESSED, SECOND, TIMINGS } from './constants.js';
+import { CURRENT, FEATURES, PRESSED, PRIORITY, SECOND, TIMINGS } from './constants.js';
 import {
   COMMAND_ROLES,
   buildDevice,
@@ -35,7 +39,7 @@ import {
 } from './devices.js';
 import { ERRORS, T, age, summaryOf, word } from './i18n.js';
 import { StatePublisher } from './publisher.js';
-import { ERROR_KINDS, KebaChannel } from './keba/channel.js';
+import { ChannelError, ERROR_KINDS, KebaChannel } from './keba/channel.js';
 import { ANSWER, COMMANDS, identityOf, meterOf, stateOf } from './keba/protocol.js';
 
 const both = (en, fr) => ({ en, fr });
@@ -86,8 +90,15 @@ export class KebaApp {
     /** serial -> number of commands that arrived; serial -> number of the last "forbid". */
     this.commandCount = new Map();
     this.lastDisable = new Map();
-    /** `${serial}:${kind}` -> { from, expected, moved, until }: a command sent, not seen yet. */
+    /** `${serial}:${kind}` -> { from, expected, moved, until, acked }: a command sent, not seen yet. */
     this.guards = new Map();
+    /** serial -> when its last "curr" left (at most one a minute). */
+    this.lastCurrAt = new Map();
+    /** `${serial}:${kind}` -> { serial, kind }: accepted (TCH-OK) but never applied. */
+    this.notApplied = new Map();
+    /** The same, already logged once. */
+    this.warnedNotApplied = new Set();
+    this.devicesChain = Promise.resolve();
   }
 
   // --- Lifecycle -------------------------------------------------------------
@@ -266,6 +277,16 @@ export class KebaApp {
     );
   }
 
+  /**
+   * A read that starts after now: never joins a read already under way
+   * (begun before a command, it may not show it).
+   */
+  freshTick(station) {
+    return station.running
+      ? station.running.catch(() => {}).then(() => this.tick(station))
+      : this.tick(station);
+  }
+
   /** One read at a time per station: a tick during a read joins it. */
   tick(station) {
     if (!station.running) {
@@ -331,15 +352,17 @@ export class KebaApp {
       await identify();
       state = stateOf(await this.report(station.address, 2));
     }
-    if (!state || state.serial !== identity.serial) {
-      throw new ReadError('no_id', 'report 2 of another station or without serial');
+    // A report 2 without serial (older firmware?) is read: report 1 named the
+    // station. The commands are refused for it (src/app.js command()).
+    if (!state || (state.serial !== undefined && state.serial !== identity.serial)) {
+      throw new ReadError('no_id', 'report 2 of another station');
     }
     let meter;
     let meterFailing = false;
     if (identity.meter) {
       try {
         meter = meterOf(await this.report(station.address, 3));
-        if (meter?.serial !== identity.serial) {
+        if (!meter || (meter.serial !== undefined && meter.serial !== identity.serial)) {
           meter = undefined;
         }
       } catch {
@@ -376,7 +399,12 @@ export class KebaApp {
     this.observe(identity.serial, state);
   }
 
-  /** The highest hardware limit seen: the select never offers less after a cable unplugged. */
+  /**
+   * The highest hardware limit seen SINCE THE START (memory only, not kept
+   * in /data): the select offers no fewer options after a cable unplugged.
+   * After a restart with no limit given yet, the select offers 6-32 A until
+   * one is read; the command always checks the limit read just before.
+   */
   updateCeiling(station, state) {
     const limit = hardwareLimit(state?.hardwareCurrent);
     if (limit !== undefined && (station.ceiling === undefined || limit > station.ceiling)) {
@@ -470,6 +498,15 @@ export class KebaApp {
       return [false, this.withInvalid(T.connecting)];
     }
     const summaries = stations.map((s) => this.summary(s));
+    // A command the station accepted (TCH-OK) without applying it.
+    for (const [key, { serial, kind }] of this.notApplied) {
+      const station = this.stationOf(serial);
+      if (station) {
+        summaries.push(T.notApplied(deviceName(station.identity), kind));
+      } else {
+        this.notApplied.delete(key);
+      }
+    }
     const summary = both(
       summaries.map((m) => m.en).join(' '),
       summaries.map((m) => m.fr).join(' '),
@@ -540,7 +577,17 @@ export class KebaApp {
       .catch((err) => this.logger.warn(`Sending to Gladys failed: ${err.message}`));
   }
 
-  async publishDevices() {
+  /**
+   * One publication at a time, each built when its turn comes: an older
+   * list never lands after a newer one.
+   */
+  publishDevices() {
+    const run = this.devicesChain.then(() => this.doPublishDevices());
+    this.devicesChain = run.catch(() => {});
+    return run;
+  }
+
+  async doPublishDevices() {
     const devices = [...this.known().values()].map((s) =>
       buildDevice(this.gladys, s, this.config.language),
     );
@@ -716,13 +763,25 @@ export class KebaApp {
       throw this.refusal(ERRORS.disabled);
     }
     const { serial, role } = target;
+    if (role === FEATURES.SET_CURRENT) {
+      const last = this.lastCurrAt.get(serial);
+      const since = last === undefined ? Infinity : received - last;
+      if (since >= 0 && since < TIMINGS.currMinInterval) {
+        throw this.refusal(ERRORS.currTooOften(age(TIMINGS.currMinInterval - since)));
+      }
+    }
     const seq = (this.commandCount.get(serial) ?? 0) + 1;
     this.commandCount.set(serial, seq);
     if (role === FEATURES.DISABLE) {
       this.lastDisable.set(serial, seq);
+      // "Forbid" never waits for the answer of another command: that wait is
+      // released (the command becomes "sent, without confirmation", with its
+      // guard), and the older commands of this station still queued are
+      // refused unsent (beforeSend).
+      this.channel.abandon((tag) => Boolean(tag?.command) && !tag.forbid);
     }
     // One command at a time per station; "forbid charging" is never refused
-    // for a command in flight (it goes after it on the channel).
+    // for a command in flight.
     const previous = this.inFlight.get(serial);
     if (previous && (role !== FEATURES.DISABLE || previous.role === FEATURES.DISABLE)) {
       throw this.refusal(ERRORS.stillRunning);
@@ -738,22 +797,41 @@ export class KebaApp {
     }
   }
 
-  /** What to send, from the state just read; undefined when it is already so. */
-  plan(role, wanted, state, serial) {
-    if (role === FEATURES.ENABLE || role === FEATURES.DISABLE) {
-      if (state.enableUser === undefined) {
-        throw this.refusal(ERRORS.missing);
-      }
-      const expected = role === FEATURES.ENABLE ? 1 : 0;
-      if (state.enableUser === expected && !this.guardActive(serial, 'ena')) {
+  /**
+   * What to send, from the state just read; undefined when it is already so.
+   * `sure`: the read is surely the answer of this request (not a late one).
+   * "Forbid" is sent even when "Enable user" is missing or the read is not
+   * sure: sending ena 0 once more is harmless.
+   */
+  plan(role, wanted, state, serial, sure) {
+    if (role === FEATURES.DISABLE) {
+      if (sure && state.enableUser === 0 && !this.guardActive(serial, 'ena')) {
         return undefined;
       }
       return {
-        payload: expected ? COMMANDS.enable() : COMMANDS.disable(),
+        payload: COMMANDS.disable(),
         kind: 'ena',
         from: state.enableUser,
-        expected,
-        gapAfter: expected ? 0 : TIMINGS.gapAfterDisable,
+        expected: 0,
+        gapAfter: TIMINGS.gapAfterDisable,
+      };
+    }
+    if (!sure) {
+      throw this.refusal(ERRORS.unsureState);
+    }
+    if (role === FEATURES.ENABLE) {
+      if (state.enableUser === undefined) {
+        throw this.refusal(ERRORS.missing);
+      }
+      if (state.enableUser === 1 && !this.guardActive(serial, 'ena')) {
+        return undefined;
+      }
+      return {
+        payload: COMMANDS.enable(),
+        kind: 'ena',
+        from: state.enableUser,
+        expected: 1,
+        gapAfter: 0,
       };
     }
     const limit = hardwareLimit(state.hardwareCurrent);
@@ -775,75 +853,90 @@ export class KebaApp {
     };
   }
 
-  /** The checks before sending, on the latest configuration. */
-  checkBeforeSend(generation, serial) {
+  /**
+   * The checks right before a datagram of a command leaves (the channel
+   * calls them at the last moment): the option, the same start, the station
+   * still read, and no "forbid" of this station arrived since.
+   */
+  checkBeforeSend(generation, serial, role, entry) {
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.disabled);
     }
     if (generation !== this.generation || !this.stationOf(serial)) {
       throw this.refusal(ERRORS.unknownStation);
     }
+    if (role !== FEATURES.DISABLE && (this.lastDisable.get(serial) ?? 0) > entry.seq) {
+      throw this.refusal(ERRORS.disableMeanwhile);
+    }
   }
 
   async command({ serial, role }, wanted, received, entry) {
     const generation = this.generation;
     const sendBy = received + TIMINGS.commandSendBy;
-    this.checkBeforeSend(generation, serial);
+    const forbid = role === FEATURES.DISABLE;
+    const priority = forbid ? PRIORITY.FORBID : PRIORITY.COMMAND;
+    const check = () => this.checkBeforeSend(generation, serial, role, entry);
+    check();
     const station = this.stationOf(serial);
     if (!station.identity.recognized) {
       throw this.refusal(ERRORS.unsupported(station.identity.product));
     }
     const readBy = sendBy - TIMINGS.commandMinSend;
     if (readBy - this.now() < TIMINGS.commandMinRead) {
-      throw this.refusal(ERRORS.tooSlow);
+      throw this.refusal(ERRORS.channelBusy);
     }
 
     // The state just before acting, never the one in memory.
-    let state;
+    let answer;
     try {
-      const answer = await this.channel.request(station.address, 'report 2', {
+      answer = await this.channel.request(station.address, 'report 2', {
         expect: REPORT(2),
         timeoutMs: TIMINGS.commandReadMax,
         startBy: readBy - TIMINGS.commandMinRead,
         answerBy: readBy,
-        priority: true,
+        priority,
+        beforeSend: check,
+        tag: { command: false, forbid },
       });
-      state = stateOf(answer.report);
     } catch (err) {
-      if (err?.kind === ERROR_KINDS.LATE) {
-        throw this.refusal(ERRORS.tooSlow);
+      if (!(err instanceof ChannelError)) {
+        throw err;
+      }
+      if (err.kind === ERROR_KINDS.LATE) {
+        throw this.refusal(ERRORS.channelBusy);
       }
       throw this.refusal(ERRORS.unknownState(reasonOf(err)));
     }
+    const state = stateOf(answer.report);
     if (generation !== this.generation) {
       throw this.refusal(ERRORS.unknownStation);
     }
-    if (!state || state.serial === undefined) {
+    if (!state) {
       throw this.refusal(ERRORS.missing);
+    }
+    if (state.serial === undefined) {
+      throw this.refusal(ERRORS.noSerial);
     }
     if (state.serial !== serial) {
       throw this.refusal(ERRORS.otherStation);
     }
-    station.state = state;
-    this.updateCeiling(station, state);
-    this.observe(serial, state);
-    // Shown in the background: the ack never waits for Gladys.
-    this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
+    const sure = !answer.unsure;
+    if (sure) {
+      station.state = state;
+      this.updateCeiling(station, state);
+      this.observe(serial, state);
+      // Shown in the background: the ack never waits for Gladys.
+      this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
+    }
 
-    const plan = this.plan(role, wanted, state, serial);
+    const plan = this.plan(role, wanted, state, serial, sure);
     if (!plan) {
       return;
-    }
-    // The option may have been turned off during the read: checked again.
-    this.checkBeforeSend(generation, serial);
-    if (role !== FEATURES.DISABLE && (this.lastDisable.get(serial) ?? 0) > entry.seq) {
-      throw this.refusal(ERRORS.disableMeanwhile);
     }
     if (this.now() > sendBy) {
       throw this.refusal(ERRORS.tooSlow);
     }
-    this.logger.info(`KEBA ${station.address}: ${plan.payload}`);
-    let answer;
+    const previousCurr = this.lastCurrAt.get(serial);
     try {
       answer = await this.channel.request(station.address, plan.payload, {
         expect: TCH,
@@ -851,40 +944,76 @@ export class KebaApp {
         startBy: sendBy,
         answerBy: received + TIMINGS.commandAnswerBy,
         gapAfter: plan.gapAfter,
-        priority: true,
+        priority,
+        tag: { command: true, forbid },
+        beforeSend: () => {
+          check();
+          if (plan.kind === 'curr') {
+            this.lastCurrAt.set(serial, this.now());
+          }
+          this.logger.info(`KEBA ${station.address}: ${plan.payload}`);
+        },
       });
     } catch (err) {
-      this.logger.warn(`KEBA ${station.address}: ${plan.payload} failed (${reasonOf(err)})`);
-      if (err?.kind === ERROR_KINDS.LATE) {
-        throw this.refusal(ERRORS.tooSlow);
+      if (!(err instanceof ChannelError)) {
+        throw err;
       }
-      if (!err?.maybeSent) {
+      this.logger.warn(`KEBA ${station.address}: ${plan.payload} failed (${reasonOf(err)})`);
+      if (err.kind === ERROR_KINDS.LATE) {
+        throw this.refusal(ERRORS.channelBusy);
+      }
+      if (!err.maybeSent) {
+        if (plan.kind === 'curr') {
+          // Never left: the minute starts from the previous one.
+          if (previousCurr === undefined) this.lastCurrAt.delete(serial);
+          else this.lastCurrAt.set(serial, previousCurr);
+        }
         throw this.refusal(ERRORS.notSent(reasonOf(err)));
       }
       // No answer: it may have reached the station.
-      this.guard(serial, plan);
+      this.guard(serial, plan, false);
       this.followUp(station);
       throw this.refusal(ERRORS.sentUnconfirmed);
     }
-    this.followUp(station);
+    if (answer.unsure) {
+      // An answer that may be the late one of an earlier command: no confirmation.
+      this.guard(serial, plan, false);
+      this.followUp(station);
+      throw this.refusal(ERRORS.sentUnconfirmed);
+    }
     if (answer.kind === ANSWER.TCH_ERR) {
+      this.followUp(station);
       throw this.refusal(ERRORS.refused);
     }
-    this.guard(serial, plan);
+    // TCH-OK means "accepted", not "applied": checked after the reads.
+    this.guard(serial, plan, true);
+    this.followUp(station, { serial, kind: plan.kind });
   }
 
-  /** Spaced reads after a command: its effect, then a check. */
-  followUp(station) {
+  /**
+   * Spaced reads after a command: its effect, then a check. Each starts
+   * after its time, never joining a read begun before. `check`: after the
+   * last one, whether an accepted command was applied.
+   */
+  followUp(station, check) {
     const generation = this.generation;
-    for (const delay of TIMINGS.followUps) {
+    TIMINGS.followUps.forEach((delay, i) => {
       const handle = this.timers.setTimeout(() => {
         station.followUps.delete(handle);
-        if (generation === this.generation) {
-          this.tick(station).catch(() => this.logger.error('KEBA refresh failed'));
+        if (generation !== this.generation) {
+          return;
+        }
+        const read = this.freshTick(station);
+        if (check && i === TIMINGS.followUps.length - 1) {
+          read
+            .then(() => this.checkApplied(check.serial, check.kind))
+            .catch(() => this.logger.error('KEBA refresh failed'));
+        } else {
+          read.catch(() => this.logger.error('KEBA refresh failed'));
         }
       }, delay);
       station.followUps.add(handle);
-    }
+    });
   }
 
   // --- Guards ----------------------------------------------------------------------
@@ -893,13 +1022,17 @@ export class KebaApp {
    * After a command, until the station shows it: a new command of the same
    * kind is always sent, never answered "already so" on a state that may not
    * show the previous one yet. The start state is kept: a read equal to it
-   * lifts nothing until a move was seen.
+   * lifts nothing until a move was seen. `acked`: the station answered
+   * TCH-OK (accepted).
    */
-  guard(serial, plan) {
+  guard(serial, plan, acked) {
     this.guards.set(`${serial}:${plan.kind}`, {
+      serial,
+      kind: plan.kind,
       from: plan.from,
       expected: plan.expected,
       moved: plan.from === undefined,
+      acked,
       until: this.now() + TIMINGS.guard,
     });
   }
@@ -909,9 +1042,34 @@ export class KebaApp {
     const guard = this.guards.get(key);
     if (guard && (this.now() >= guard.until || this.now() < guard.until - TIMINGS.guard)) {
       this.guards.delete(key);
+      this.notAppliedIf(guard);
       return false;
     }
     return Boolean(guard);
+  }
+
+  /** An accepted command whose value never left its start state: said once. */
+  notAppliedIf(guard) {
+    if (!guard.acked || guard.moved || guard.from === guard.expected) {
+      return false;
+    }
+    const key = `${guard.serial}:${guard.kind}`;
+    this.notApplied.set(key, { serial: guard.serial, kind: guard.kind });
+    if (!this.warnedNotApplied.has(key)) {
+      this.warnedNotApplied.add(key);
+      this.logger.warn(
+        `KEBA ${guard.serial}: ${guard.kind} accepted (TCH-OK) but not applied: model (c-series?) or setting (DSW1.3, load management)`,
+      );
+    }
+    return true;
+  }
+
+  /** After the last read following an accepted command. */
+  async checkApplied(serial, kind) {
+    const guard = this.guards.get(`${serial}:${kind}`);
+    if (guard && this.notAppliedIf(guard)) {
+      await this.updateStatus();
+    }
   }
 
   /** A read of a station, through its guards: never lifted on an unknown value. */
@@ -929,6 +1087,7 @@ export class KebaApp {
       }
       if (guard.moved && value === guard.expected) {
         this.guards.delete(`${serial}:${kind}`);
+        this.notApplied.delete(`${serial}:${kind}`);
       }
     }
   }

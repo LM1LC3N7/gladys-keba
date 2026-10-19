@@ -22,7 +22,7 @@
       },
       "description": {
         "en": "Shows your KEBA KeContact P20 or P30 charging station (or a BMW wallbox built on it) in Gladys through its local UDP interface (port 7090), without any cloud: state, plug and cable, power, current and voltage per phase, energy of the session, total energy, current limit, enabled and failsafe states. Turn the UDP interface on in the station first (DIP switch, see the guide). This interface has NO authentication: keep the station on a trusted local network. Enter its IP address, save, then add it from the Discovery tab. Allowing or forbidding the charge and the charging current can be changed from Gladys only if you allow the commands below. Never tested with a real station. Not affiliated with KEBA.",
-        "fr": "Affiche votre borne de recharge KEBA KeContact P20 ou P30 (ou une wallbox BMW qui en dérive) dans Gladys par son interface UDP locale (port 7090), sans cloud : état, prise et câble, puissance, courant et tension par phase, énergie de la session, énergie totale, courant maximal, états d'activation et failsafe. Activez d'abord l'interface UDP sur la borne (DIP switch, voir le guide). Cette interface n'a AUCUNE authentification : gardez la borne sur un réseau local de confiance. Saisissez son adresse IP, enregistrez, puis ajoutez-la depuis l'onglet Découverte. Autoriser ou interdire la charge et le courant de charge ne se changent depuis Gladys que si vous autorisez les commandes ci-dessous. Jamais testé avec une vraie borne. Sans lien avec KEBA."
+        "fr": "Affiche votre borne de recharge KEBA KeContact P20 ou P30 (ou une wallbox BMW qui en dérive) dans Gladys par son interface UDP locale (port 7090), sans cloud : état, prise et câble, puissance, courant et tension par phase, énergie de la session, énergie totale, courant maximal, états d'activation et de repli. Activez d'abord l'interface UDP sur la borne (micro-interrupteur DIP, voir le guide). Cette interface n'a AUCUNE authentification : gardez la borne sur un réseau local de confiance. Saisissez son adresse IP, enregistrez, puis ajoutez-la depuis l'onglet Découverte. Autoriser ou interdire la charge et le courant de charge ne se changent depuis Gladys que si vous autorisez les commandes ci-dessous. Jamais testé avec une vraie borne. Sans lien avec KEBA."
       },
       "links": [
         {
@@ -67,8 +67,8 @@
         "fr": "Autoriser les commandes"
       },
       "description": {
-        "en": "Off by default. On: Gladys may allow or forbid the charge (ena 1 / ena 0) and set the charging current (6 A to the hardware limit of the station). Anyone on your network can already send them: the station has no authentication. Off: these three features refuse every command. The failsafe mode is never changed.",
-        "fr": "Désactivé par défaut. Activé : Gladys peut autoriser ou interdire la charge (ena 1 / ena 0) et régler le courant de charge (de 6 A à la limite matérielle de la borne). N'importe qui sur votre réseau peut déjà les envoyer : la borne n'a pas d'authentification. Désactivé : ces trois fonctionnalités refusent toute commande. Le mode failsafe n'est jamais modifié."
+        "en": "Off by default. On: Gladys may allow or forbid the charge (ena 1 / ena 0) and set the charging current (6 A to the hardware limit of the station, at most once a minute). Anyone on your network can already send them: the station has no authentication. Off: these three features refuse every command. The failsafe mode is never changed.",
+        "fr": "Désactivé par défaut. Activé : Gladys peut autoriser ou interdire la charge (ena 1 / ena 0) et régler le courant de charge (de 6 A à la limite matérielle de la borne, au plus une fois par minute). N'importe qui sur votre réseau peut déjà les envoyer : la borne n'a pas d'authentification. Désactivé : ces trois fonctionnalités refusent toute commande. Le mode de repli n'est jamais modifié."
       },
       "required": false,
       "default": false

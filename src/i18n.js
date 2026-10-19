@@ -43,7 +43,7 @@ export const FEATURE_NAMES = {
   [FEATURES.MAX_CURRENT]: both('Maximum current allowed', 'Courant maximal autorisé'),
   [FEATURES.ENABLED_SYSTEM]: both('Charging enabled (station)', 'Charge activée (borne)'),
   [FEATURES.ENABLED_USER]: both('Charging allowed (ena)', 'Charge autorisée (ena)'),
-  [FEATURES.FAILSAFE]: both('Failsafe mode', 'Mode failsafe'),
+  [FEATURES.FAILSAFE]: both('Failsafe mode', 'Mode de repli'),
   [FEATURES.AUTH_REQUIRED]: both('Authorization required', 'Autorisation requise'),
   [FEATURES.ENABLE]: both('Allow charging', 'Autoriser la charge'),
   [FEATURES.DISABLE]: both('Forbid charging', 'Interdire la charge'),
@@ -92,7 +92,7 @@ export const T = {
   unreachable: (list, wait) =>
     both(
       `No answer from ${list} (next try in ${wait.en}). Check the address, that the UDP interface of the station is on (DIP switch), and that nothing else on this host uses UDP port 7090.`,
-      `Pas de réponse de ${list} (nouvel essai dans ${wait.fr}). Vérifiez l'adresse, que l'interface UDP de la borne est activée (DIP switch), et que rien d'autre sur cet hôte n'utilise le port UDP 7090.`,
+      `Pas de réponse de ${list} (nouvel essai dans ${wait.fr}). Vérifiez l'adresse, que l'interface UDP de la borne est activée (micro-interrupteur DIP), et que rien d'autre sur cet hôte n'utilise le port UDP 7090.`,
     ),
   portBusy: (wait) =>
     both(
@@ -105,6 +105,17 @@ export const T = {
   ),
   test: {
     cooldown: both('Tested less than 10 s ago.', 'Testé il y a moins de 10 s.'),
+  },
+  /** A command the station accepted (TCH-OK) but never applied. */
+  notApplied: (name, kind) => {
+    const what =
+      kind === 'curr'
+        ? both('the charging current', 'le courant de charge')
+        : both('allowing / forbidding the charge', "l'autorisation ou l'interdiction de la charge");
+    return both(
+      `${name} accepted ${what.en} without applying it: model (c-series?) or setting (DSW1.3, load management).`,
+      `${name} a accepté ${what.fr} sans l'appliquer : modèle (c-series ?) ou réglage (DSW1.3, gestion de charge).`,
+    );
   },
 };
 
@@ -154,6 +165,23 @@ export const ERRORS = {
     'The station answered too slowly to send the command in time: not sent.',
     'La borne a répondu trop lentement pour envoyer la commande à temps : non envoyée.',
   ),
+  channelBusy: both(
+    'The link to the stations was busy (other reads or commands in progress): command not sent, try again.',
+    'La liaison avec les bornes était occupée (autres lectures ou commandes en cours) : commande non envoyée, réessayez.',
+  ),
+  currTooOften: (wait) =>
+    both(
+      `The charging current is changed at most once a minute per station (next possible in ${wait.en}): not sent. "Forbid charging" stays available.`,
+      `Le courant de charge se change au plus une fois par minute et par borne (prochain possible dans ${wait.fr}) : non envoyé. « Interdire la charge » reste disponible.`,
+    ),
+  unsureState: both(
+    'The answer of the station may be a late one of an earlier read: command not sent, try again in a few seconds.',
+    "La réponse de la borne est peut-être celle, en retard, d'une lecture précédente : commande non envoyée, réessayez dans quelques secondes.",
+  ),
+  noSerial: both(
+    'The station does not give its serial number in its state report: it is read only, commands refused.',
+    "La borne ne donne pas son numéro de série dans son rapport d'état : elle est en lecture seule, commandes refusées.",
+  ),
   unknownState: (reason) =>
     both(
       `The state of the station could not be read just before (${reason}): command not sent.`,
@@ -170,11 +198,11 @@ export const ERRORS = {
     ),
   refused: both(
     'The station refused the command (TCH-ERR): its model or its configuration (DIP switches, UDP interface, load management) may not allow it.',
-    'La borne a refusé la commande (TCH-ERR) : son modèle ou sa configuration (DIP switches, interface UDP, gestion de charge) ne le permet peut-être pas.',
+    'La borne a refusé la commande (TCH-ERR) : son modèle ou sa configuration (micro-interrupteurs DIP, interface UDP, gestion de charge) ne le permet peut-être pas.',
   ),
   sentUnconfirmed: both(
-    'Command sent, without confirmation (no answer from the station): check its state in a few seconds.',
-    'Commande envoyée, sans confirmation (pas de réponse de la borne) : vérifiez son état dans quelques secondes.',
+    'Command sent, without confirmation (no sure answer from the station): check its state in a few seconds.',
+    'Commande envoyée, sans confirmation (pas de réponse sûre de la borne) : vérifiez son état dans quelques secondes.',
   ),
 };
 

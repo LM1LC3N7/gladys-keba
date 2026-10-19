@@ -11,9 +11,10 @@ Unofficial, **never tested with a real station**. Not affiliated with KEBA.
   total energy (plain sensors, never an energy index); maximum current
   allowed, enabled states, failsafe mode, authorization required.
 - Optional commands, **off by default**: allow / forbid charging (`ena 1` /
-  `ena 0`, two buttons, never a switch) and the charging current (`curr`, a
-  select from 6 A to the hardware limit of the station). The failsafe mode is
-  read only.
+  `ena 0`, two buttons, never a switch; "forbid" always goes first) and the
+  charging current (`curr`, a select from 6 A to the hardware limit of the
+  station, at most once a minute). TCH-OK means "accepted": a command never
+  applied is reported. The failsafe mode is read only.
 - **The KEBA UDP interface has no authentication**: keep the station on a
   trusted local network. Turn the interface on first (DIP switch DSW1.3 on a
   P20 / P30 c-series, web interface on a P30 x-series).

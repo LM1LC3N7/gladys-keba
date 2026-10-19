@@ -178,9 +178,16 @@ export function parseDeviceId(externalId) {
   return match ? match[1] : undefined;
 }
 
-/** A hardware limit usable as a bound: a whole number of amperes, 6 to 63 A. */
+/**
+ * A hardware limit usable as a bound: rounded DOWN to the ampere (20.5 A
+ * allows 20 A, never 21), then 6 to 63 A.
+ */
 export function hardwareLimit(amps) {
-  return Number.isInteger(amps) && amps >= CURRENT.min && amps <= CURRENT.max ? amps : undefined;
+  if (typeof amps !== 'number' || !Number.isFinite(amps)) {
+    return undefined;
+  }
+  const whole = Math.floor(amps + 1e-9);
+  return whole >= CURRENT.min && whole <= CURRENT.max ? whole : undefined;
 }
 
 export function currentOptions(ceiling) {
@@ -196,8 +203,8 @@ export const deviceName = (identity) =>
 
 /**
  * The Gladys device of one station. `ceiling`: the highest hardware limit
- * seen (the select never offers more; the command checks the limit read just
- * before sending anyway).
+ * seen since the start (memory only; 32 A while none is known). The options
+ * are only an offer: the command checks the limit read just before sending.
  */
 export function buildDevice(gladys, { identity, ceiling }, language) {
   const ids = stationIds(gladys, identity.serial);

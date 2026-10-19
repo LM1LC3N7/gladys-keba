@@ -78,8 +78,14 @@ test/                             node --test, against the SDK's fake Gladys (in
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.
 - **KEBA UDP.** One request at a time on the channel, never less than 100 ms
-  between two messages (2 s after `ena 0`); an answer counts only from the IP
-  it was sent to and of the kind expected. Commands stay behind
-  `allow_commands` (off by default), are decided on a fresh report 2, never
-  use a switch, never send `curr 0`, never touch the failsafe mode. The
-  energies stay plain sensors, never an `index`/`energy` feature.
+  between two messages, 2 s for a station after its `ena 0` (the others go
+  on); an answer counts only from the IP it was sent to and of the kind
+  expected, and an answer that may be a late one (`unsure`) never confirms a
+  command nor decides one. Commands stay behind `allow_commands` (off by
+  default), are decided on a fresh report 2, are checked again by
+  `beforeSend` right before each datagram leaves, never use a switch, never
+  send `curr 0` (one `curr` a minute per station at most), never touch the
+  failsafe mode. "Forbid charging" is never held back by the channel
+  (priority, releases another command's wait, older commands never leave
+  after it). TCH-OK means accepted, not applied. The energies stay plain
+  sensors, never an `index`/`energy` feature.

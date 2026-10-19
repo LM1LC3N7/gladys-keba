@@ -18,16 +18,22 @@ export const DEFAULT_CONFIG = {
   language: 'fr',
 };
 
-/** An IPv4 address typed by the user (no leading zeros), else undefined. */
+/**
+ * A unicast IPv4 address typed by the user (no leading zeros), else
+ * undefined. Refused: 0.0.0.0/8, loopback 127/8, multicast and reserved
+ * (224 and above, broadcast included), and an address ending in .255 (the
+ * broadcast of a home /24 network): a command must reach one station only.
+ */
 export function parseAddress(raw) {
   const text = String(raw ?? '').trim();
   if (isIP(text) !== 4) {
     return undefined;
   }
-  return text
-    .split('.')
-    .map((part) => String(Number(part)))
-    .join('.');
+  const parts = text.split('.').map(Number);
+  if (parts[0] === 0 || parts[0] === 127 || parts[0] >= 224 || parts[3] === 255) {
+    return undefined;
+  }
+  return parts.join('.');
 }
 
 /** Only `true` (or the text "true") allows: anything else, missing included, refuses. */

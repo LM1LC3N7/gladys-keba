@@ -280,7 +280,7 @@ test('a station not answering: unreachable, then spaced retries', async (t) => {
   await advance(35 * SECOND, SECOND);
   assert.equal(gladys.fake.connectionStatus.connected, false);
   assert.match(message(gladys).fr, /Pas de réponse de 192\.168\.1\.60/);
-  assert.match(message(gladys).fr, /DIP switch/);
+  assert.match(message(gladys).fr, /micro-interrupteur DIP/);
   assert.equal(last(gladys, 'status'), 'Borne injoignable');
   assert.equal(last(gladys, 'connector-status'), CONNECTOR_STATUS.UNAVAILABLE);
   assert.equal(last(gladys, 'power'), 11040, 'the other values are kept');
@@ -403,11 +403,13 @@ test('already so: nothing sent', async (t) => {
 });
 
 test('the charging current: 6 A to the hardware limit, checked on the fresh report', async (t) => {
-  const { press, net, station } = await setup(t, { config: ALLOWED });
+  const { press, net, station, advance } = await setup(t, { config: ALLOWED });
   let ack = await press('set-current', '20');
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(net.commands(), ['curr 20000']);
   assert.equal(station.r2['Curr user'], 20000);
+  // At most one "curr" a minute.
+  await advance(MINUTE);
   // Above the hardware limit read just before (now 16 A): refused, not sent.
   station.r2['Curr HW'] = 16000;
   ack = await press('set-current', '20');
@@ -443,16 +445,18 @@ test('TCH-ERR: refused by the station, said as such', async (t) => {
 });
 
 test('no answer to the command: "sent, without confirmation", and the guard', async (t) => {
-  const { press, net, station } = await setup(t, { config: ALLOWED });
+  const { press, net, station, advance } = await setup(t, { config: ALLOWED });
   station.silentTo = ['ena 0'];
   station.applies = false;
   let ack = await press('disable-charge');
   assert.equal(ack.success, false);
   assert.match(ack.error, /envoyée, sans confirmation/);
   // The station still shows "enabled", but the "forbid" may land: an "allow"
-  // is sent anyway, never answered "already so".
+  // is sent anyway, never answered "already so" (after the 10 s during which
+  // a late answer of the "forbid" is expected).
   station.silentTo = [];
   station.applies = true;
+  await advance(10 * SECOND);
   ack = await press('enable-charge');
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(net.commands(), ['ena 0', 'ena 1']);

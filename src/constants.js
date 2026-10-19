@@ -88,6 +88,13 @@ export const LIMITS = {
   textLength: 60,
 };
 
+/** Channel priorities: "forbid charging" first, then the other commands, then the polling. */
+export const PRIORITY = {
+  POLL: 0,
+  COMMAND: 1,
+  FORBID: 2,
+};
+
 export const SECOND = 1_000;
 export const MINUTE = 60 * SECOND;
 export const HOUR = 60 * MINUTE;
@@ -95,10 +102,20 @@ export const HOUR = 60 * MINUTE;
 export const TIMINGS = {
   /**
    * The station needs a pause between two messages: keba-kecontact waits
-   * 100 ms after every message (reports included), 2 s after "ena 0".
+   * 100 ms after every message (reports included), 2 s after "ena 0". The
+   * 100 ms hold for the whole channel; the 2 s only for the station that got
+   * the "ena 0" (the others go on).
    */
   gap: 100,
   gapAfterDisable: 2 * SECOND,
+  /** After a request went unanswered, its late answer is expected this long. */
+  lateAnswerQuarantine: 10 * SECOND,
+  /**
+   * A "curr" at most once a minute per station: no fine regulation (the
+   * value may be written to the flash of the station, to check). "Forbid
+   * charging" is never limited.
+   */
+  currMinInterval: MINUTE,
   /** One report of the polling (a station on the LAN answers in well under 1 s). */
   readTimeout: 2 * SECOND,
   /** Report 1 (identity, firmware) is read again every hour. */

@@ -78,7 +78,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * `stations`: host -> { r1, r2, r3, ... }. Per station, the test may set:
  * `silent` (no answer at all), `silentTo` (a list of payloads not answered),
- * `delay` (ms before answering), `refuse` (TCH-ERR to commands), `raw`
+ * `delay` (ms before answering), `delays` (payload -> ms: answered late
+ * with the state held when asked), `refuse` (TCH-ERR to commands), `raw`
  * (payload -> raw text answered), `applies` (false: a command changes
  * nothing), `sendError` (true or a list of payloads: the socket send fails).
  */
@@ -127,7 +128,14 @@ export function fakeKeba(stations = { [HOST]: { r1: report1(), r2: report2(), r3
             );
           }
         };
-        if (station.delay) {
+        const late = station.delays?.[payload];
+        if (late) {
+          // The answer is what the station held when asked, delivered late.
+          const text = net.answer(station, payload);
+          wait(late).then(() =>
+            socket.emit('message', Buffer.from(text, 'latin1'), { address: host, port: 7090 }),
+          );
+        } else if (station.delay) {
           wait(station.delay).then(answer);
         } else {
           answer();

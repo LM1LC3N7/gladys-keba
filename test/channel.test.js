@@ -137,3 +137,75 @@ test('closed: the queued requests are rejected', async (t) => {
   assert.equal((await a).kind, ERROR_KINDS.CLOSED);
   assert.equal((await b).kind, ERROR_KINDS.CLOSED);
 });
+
+test('M2: after a timeout, the next answer of that kind is "unsure"; consumed when nothing waits', async (t) => {
+  const net = fakeKeba({ [HOST]: { r1: report1(), r2: report2(), delay: 2500 } });
+  const { channel, advance } = await setup(t, net);
+  const first = channel.request(HOST, 'report 2', REPORT2).catch((err) => err);
+  await advance(2100);
+  assert.equal((await first).kind, ERROR_KINDS.TIMEOUT);
+  net.stations[HOST].delay = 100;
+  // The late answer arrives (at 2.5 s) while a new report 2 waits: unsure.
+  const second = channel.request(HOST, 'report 2', REPORT2);
+  await advance(1000);
+  assert.equal((await second).unsure, true);
+  // Counted off: the next one is sure.
+  const third = channel.request(HOST, 'report 2', REPORT2);
+  await advance(1000);
+  assert.equal((await third).unsure, undefined);
+});
+
+test('I1: the 2 s pause after "ena 0" holds that station only', async (t) => {
+  const B = '192.168.1.61';
+  const net = fakeKeba({
+    [HOST]: { r1: report1(), r2: report2() },
+    [B]: { r1: report1(), r2: report2() },
+  });
+  const { channel, advance } = await setup(t, net);
+  const a = channel.request(HOST, 'ena 0', {
+    expect: { kind: 'tch' },
+    timeoutMs: 1000,
+    gapAfter: 2000,
+  });
+  const b = channel.request(B, 'report 2', REPORT2);
+  const c = channel.request(HOST, 'report 2', REPORT2);
+  await advance(2500);
+  await Promise.all([a, b, c]);
+  assert.deepEqual(net.payloads(), ['ena 0', 'report 2', 'report 2']);
+  assert.equal(net.sent[1].host, B);
+  assert.ok(net.sent[1].at - net.sent[0].at < 500);
+  assert.ok(net.sent[2].at - net.sent[0].at >= 2000);
+});
+
+test('I2: beforeSend throwing: nothing sent, its error', async (t) => {
+  const { channel, net, advance } = await setup(t);
+  const p = channel
+    .request(HOST, 'ena 1', {
+      expect: { kind: 'tch' },
+      timeoutMs: 1000,
+      beforeSend: () => {
+        throw new Error('option off');
+      },
+    })
+    .catch((err) => err);
+  await advance(200);
+  assert.equal((await p).message, 'option off');
+  assert.deepEqual(net.payloads(), []);
+});
+
+test('I1: abandon releases the wait of a command: "maybe sent"', async (t) => {
+  const net = fakeKeba({ [HOST]: { r1: report1(), r2: report2(), silentTo: ['ena 1'] } });
+  const { channel, advance } = await setup(t, net);
+  const p = channel
+    .request(HOST, 'ena 1', { expect: { kind: 'tch' }, timeoutMs: 4000, tag: { command: true } })
+    .catch((err) => err);
+  await advance(50);
+  assert.equal(
+    channel.abandon((tag) => tag?.command),
+    true,
+  );
+  await settle();
+  const err = await p;
+  assert.equal(err.kind, ERROR_KINDS.ABANDONED);
+  assert.equal(err.maybeSent, true);
+});

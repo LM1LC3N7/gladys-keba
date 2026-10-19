@@ -21,7 +21,7 @@ Un appareil par borne (identifiée par son numéro de série), avec :
   jamais un index du suivi énergétique (la borne est déjà derrière votre
   compteur, elle serait comptée deux fois) ;
 - **courant maximal autorisé** (A), **charge activée** par la borne et
-  **charge autorisée** (« ena »), **mode failsafe** actif ou non,
+  **charge autorisée** (« ena »), **mode de repli** (failsafe) actif ou non,
   **autorisation requise** (RFID) ;
 - en option, trois commandes (voir plus bas).
 
@@ -32,7 +32,7 @@ restent vides.
 ## 1. Activer l'interface UDP sur la borne
 
 L'interface UDP (« smart home interface ») est **désactivée en usine**. Sur une
-P20 ou une P30 c-series, elle s'active par un **DIP switch** dans la borne :
+P20 ou une P30 c-series, elle s'active par un **micro-interrupteur DIP** dans la borne :
 d'après la documentation KEBA, le commutateur **DSW1.3** sur **ON** (à vérifier
 dans le manuel d'installation de votre modèle). Sur une P30 x-series, elle se
 règle dans son interface web (paramètre « UDP » / « Smart Home interface »).
@@ -68,40 +68,78 @@ Avec l'option **Autoriser les commandes** :
 - **Autoriser la charge** et **Interdire la charge** : deux boutons qui
   envoient `ena 1` et `ena 0` ;
 - **Régler le courant de charge** : une liste de 6 A à la limite matérielle de
-  la borne (`curr`).
+  la borne (`curr`), **au plus une fois par minute et par borne**. Ce n'est pas
+  une régulation fine (suivi de la production solaire seconde par seconde) :
+  la borne garde peut-être cette valeur en mémoire permanente, ce qui reste à
+  vérifier. Un changement plus rapproché est refusé sans envoi ; « Interdire
+  la charge » reste toujours disponible.
 
 Jamais d'interrupteur : un « tout éteindre » d'un assistant vocal ou d'une
 scène ne peut pas couper la charge. Avant chaque commande, la borne est relue
 (rapport 2) et la commande décidée sur cette lecture ; le courant est refusé
-au-dessus de la limite matérielle lue à ce moment (`Curr HW`). Une commande sans
-réponse est dite « envoyée, sans confirmation » ; un refus de la borne
-(`TCH-ERR`) est affiché tel quel : selon KEBA, certains modèles ou réglages
-(DIP switches, gestion de charge d'un groupe de bornes) refusent ces commandes.
-Un produit que l'intégration ne reconnaît pas (ni KEBA P20/P30, ni BMW) refuse
-les commandes.
+au-dessus de la limite matérielle lue à ce moment (`Curr HW`, arrondie à
+l'ampère inférieur). L'option est revérifiée juste avant que la commande parte.
 
-Le **mode failsafe** est seulement lu : l'intégration ne le modifie jamais.
-Démarrer ou arrêter une session avec un badge RFID n'est pas proposé.
+Ce que disent les réponses :
+
+- **TCH-OK** veut dire que la borne a **accepté** la commande, pas qu'elle
+  l'a **appliquée**. L'intégration relit la borne ensuite ; si la valeur n'a
+  jamais bougé, elle l'écrit une fois dans le journal et dans le statut
+  (« a accepté … sans l'appliquer ») : modèle qui ne se pilote pas (c-series ?)
+  ou réglage (DSW1.3, gestion de charge d'un groupe de bornes).
+- **TCH-ERR** : la borne a refusé (modèle ou configuration).
+- Pas de réponse : « envoyée, sans confirmation » ; vérifiez l'état quelques
+  secondes plus tard.
+- Un produit que l'intégration ne reconnaît pas (ni KEBA P20/P30, ni BMW), ou
+  une borne qui ne donne pas son numéro de série dans le rapport 2, refuse les
+  commandes (lecture seule).
+
+**Interdire la charge** passe toujours en premier : il n'attend pas la réponse
+d'une autre commande en cours (celle-ci devient « envoyée, sans
+confirmation »), et un « Autoriser » ou un courant plus ancien ne part jamais
+après lui. **Interdire reste en place** jusqu'à un « Autoriser la charge » (à
+vérifier : peut-être aussi jusqu'à un redémarrage de la borne) : une scène qui
+interdit la charge doit aussi la réautoriser.
+
+« Charge autorisée (ena) » montre l'état de ces deux boutons. « Charge activée
+(borne) » (`Enable sys`) montre si la borne permet la charge au total : elle
+peut rester à 0 avec « ena » à 1 à cause d'une autre cause (entrée X1, badge
+RFID, gestion de charge, micro-interrupteurs).
+
+Le **mode de repli** (failsafe) est seulement lu : l'intégration ne le modifie
+jamais. Démarrer ou arrêter une session avec un badge RFID n'est pas proposé.
 
 Avec les commandes autorisées, le chat IA de Gladys (MCP) peut créer et lancer
 une scène qui autorise ou interdit la charge.
 
 ## Réseau et Docker
 
-La borne répond au **port UDP 7090 de l'expéditeur**. L'intégration ouvre ce
-port dans son conteneur ; les réponses passent par le réseau Docker de Gladys
-(NAT) sans réglage. Si un autre programme de la même machine parle déjà à la
-borne depuis le port 7090 (Home Assistant en réseau hôte, par exemple), les
-réponses peuvent se perdre : n'utilisez qu'un seul des deux. Ce point n'a pas
-été vérifié sur une vraie installation.
+La borne répond au **port UDP 7090 de l'expéditeur**, quel que soit le port
+d'où la question est partie. L'intégration ouvre le port 7090 dans son
+conteneur, sur le réseau Docker de Gladys (pont avec NAT). Cela ne marche que
+si Docker garde le port source 7090 en sortie :
+
+- sur Linux avec Docker « classique », la translation (MASQUERADE) garde en
+  général le port source quand il est libre sur l'hôte : c'est le cas attendu ;
+- avec Docker Desktop (Windows, macOS) ou Docker « rootless », le trafic passe
+  par une couche réseau qui peut changer le port source : les réponses se
+  perdent alors et la borne paraît injoignable ;
+- si un autre programme de la même machine parle déjà à la borne depuis le
+  port 7090 (Home Assistant ou evcc en réseau hôte, par exemple), Docker doit
+  changer le port source et les réponses se perdent : n'en gardez qu'un.
+
+Rien de cela n'a été vérifié sur une vraie installation.
 
 ## Rythme
 
 Chaque borne est lue toutes les 30 s par défaut (10 s à 10 min) : rapport 2
 (état), rapport 3 (compteur), et le rapport 1 (identité) une fois par heure.
-Une seule requête à la fois, 100 ms au moins entre deux messages (2 s après
-`ena 0`), comme keba-kecontact. Une borne qui ne répond plus est relue après
-30 s, 1, 2 puis 5 min ; elle apparaît « Borne injoignable ».
+Une seule requête à la fois pour toutes les bornes, 100 ms au moins entre deux
+messages, et 2 s de pause pour la borne qui vient de recevoir `ena 0` (les
+autres continuent), comme keba-kecontact. Une réponse qui arrive en retard
+n'est jamais prise pour celle d'une requête suivante. Une borne qui ne répond
+plus est relue après 30 s, 1, 2 puis 5 min ; elle apparaît « Borne
+injoignable ».
 
 ## Limites
 
@@ -109,7 +147,7 @@ Une seule requête à la fois, 100 ms au moins entre deux messages (2 s après
 - Adresses IPv4 seulement (une réponse est attribuée à sa requête par son
   adresse source).
 - Pas de découverte automatique (le broadcast ne traverse pas le réseau Docker).
-- Pas de démarrage par badge RFID, pas de failsafe, pas de bascule de phases,
+- Pas de démarrage par badge RFID, pas de réglage du mode de repli, pas de bascule de phases,
   pas d'historique des sessions (rapports 1xx).
 
 ## Crédits

@@ -19,11 +19,14 @@ the notes of the version's GitHub Release.
   (plain sensors, never an energy index), maximum current allowed, enabled
   states, failsafe mode (read only) and authorization required.
 - Optional commands, off by default: allow / forbid charging (two buttons)
-  and the charging current (a select from 6 A to the hardware limit), each
-  decided on a fresh report of the station.
-- One UDP request at a time, at least 100 ms between two messages (2 s after
-  `ena 0`), each answer attributed to its request by source address and
-  report kind.
+  and the charging current (a select from 6 A to the hardware limit, at most
+  once a minute per station), each decided on a fresh report of the station
+  and checked again right before it leaves. "Forbid charging" always goes
+  first. A command accepted (TCH-OK) but never applied is reported in the
+  log and the status.
+- One UDP request at a time, at least 100 ms between two messages (2 s for a
+  station after its `ena 0`), each answer attributed to its request by source
+  address and report kind; a late answer is never taken for a later one.
 - "Test the connection" button; English and French guides (UDP interface,
   DIP switch, no authentication on the station).
 
